@@ -24,7 +24,7 @@ A conversational AI chatbot that answers questions about company HR policies usi
 5. Chunks + question sent to Llama 3.3 70B → human-readable answer returned
 
 ## Live Demo
-[Coming soon — Streamlit deployment link]
+[Live demo link: https://hr-assistant-chatbot-3s9qlzovwdtigbi93amy2u.streamlit.app/]
 
 ## Setup
 1. Clone the repo
