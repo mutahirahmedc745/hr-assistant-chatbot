@@ -1,13 +1,82 @@
-# Query rewriting function
+import streamlit as st
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_groq import ChatGroq
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+import os
+
+# Page configuration
+st.set_page_config(
+    page_title="TechCorp HR Assistant",
+    page_icon="🤖",
+    layout="centered"
+)
+
+st.title("🤖 TechCorp HR Assistant")
+st.markdown("Ask me anything about TechCorp Pakistan's HR policies.")
+st.divider()
+
+# Load API key
+try:
+    if "GROQ_API_KEY" in st.secrets:
+        os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
+    else:
+        st.error("GROQ_API_KEY not found in secrets!")
+        st.stop()
+except Exception as e:
+    st.error(f"Error loading API key: {e}")
+    st.stop()
+
+# Load LLM
+@st.cache_resource
+def load_llm():
+    return ChatGroq(
+        model_name="llama-3.3-70b-versatile",
+        temperature=0.2
+    )
+
+# Load embeddings
+@st.cache_resource
+def load_embeddings():
+    return HuggingFaceEmbeddings(
+        model_name="all-MiniLM-L6-v2"
+    )
+
+# Load vectorstore
+@st.cache_resource
+def load_vectorstore(_embeddings):
+    loader = PyPDFLoader("hr_policy.pdf")
+    documents = loader.load()
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=50
+    )
+    chunks = text_splitter.split_documents(documents)
+    vectorstore = FAISS.from_documents(chunks, _embeddings)
+    return vectorstore
+
+# Initialize everything
+try:
+    llm = load_llm()
+    embeddings = load_embeddings()
+    vectorstore = load_vectorstore(embeddings)
+except Exception as e:
+    st.error(f"Initialization error: {e}")
+    st.stop()
+
+# Query rewriting
 def rewrite_question(question, history):
     if not history:
         return question
-    
     history_text = "\n".join([
-        f"Human: {msg['content']}\nAssistant: {msg['content']}"
-        for msg in history if msg['role'] != 'system'
+        f"Human: {msg['content']}\nAssistant: {history[i+1]['content']}"
+        for i, msg in enumerate(history)
+        if msg['role'] == 'user' and i+1 < len(history)
     ])
-    
     rewrite_prompt = f"""Given this conversation history:
 {history_text}
 
@@ -16,16 +85,12 @@ Return ONLY the rewritten question, nothing else.
 
 Follow-up question: {question}
 Standalone question:"""
-    
     rewritten = llm.invoke(rewrite_prompt).content
     return rewritten.strip()
 
 # Main RAG function
 def ask_question(question, chat_history):
-    # Rewrite vague questions
     standalone_question = rewrite_question(question, chat_history)
-    
-    # Build conversation history text
     history_text = ""
     if chat_history:
         history_text = "\n".join([
@@ -71,7 +136,6 @@ Answer:"""
 
     answer = chain.invoke(standalone_question)
 
-    # Extract sources
     sources = []
     for doc in retrieved_docs:
         page = doc.metadata.get('page', 0) + 1
@@ -82,10 +146,9 @@ Answer:"""
 
     return answer, sources
 
-# Initialize chat history in Streamlit session state
+# Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
-    # Welcome message
     st.session_state.messages.append({
         "role": "assistant",
         "content": "Hello! I'm the TechCorp HR Assistant. Ask me anything about our HR policies — leaves, working hours, salary, benefits, or code of conduct."
@@ -100,9 +163,8 @@ for message in st.session_state.messages:
                 for source in message["sources"]:
                     st.caption(source)
 
-# Chat input at the bottom
+# Chat input
 if question := st.chat_input("Ask about HR policies..."):
-    # Show user message
     st.session_state.messages.append({
         "role": "user",
         "content": question
@@ -110,19 +172,22 @@ if question := st.chat_input("Ask about HR policies..."):
     with st.chat_message("user"):
         st.markdown(question)
 
-    # Get answer
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            answer, sources = ask_question(
-                question,
-                st.session_state.messages[:-1]
-            )
+            try:
+                answer, sources = ask_question(
+                    question,
+                    st.session_state.messages[:-1]
+                )
+            except Exception as e:
+                answer = f"Error generating answer: {e}"
+                sources = []
         st.markdown(answer)
-        with st.expander("📄 Sources"):
-            for source in sources:
-                st.caption(source)
+        if sources:
+            with st.expander("📄 Sources"):
+                for source in sources:
+                    st.caption(source)
 
-    # Save assistant response
     st.session_state.messages.append({
         "role": "assistant",
         "content": answer,
